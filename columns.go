@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -27,9 +28,19 @@ var (
 	// the struct does not have a field that matches the column
 	// specified.
 	ErrStructFieldMissing = errors.New("struct field missing")
+
+	// ColumnsMapper transforms struct/map field names
+	// into the database column names.
+	// E.g. you can set function for convert CamelCase into snake_case
+	ColumnsMapper = func(name string) string { return name }
 )
 
 var columnsCache cache = &sync.Map{}
+
+type cacheKey struct {
+	Type   reflect.Type
+	Strict bool
+}
 
 // Columns scans a struct and returns a list of strings
 // that represent the assumed column names based on the
@@ -53,21 +64,38 @@ func columns(v interface{}, strict bool, excluded ...string) ([]string, error) {
 		return nil, fmt.Errorf("columns: %w", err)
 	}
 
-	if cache, ok := columnsCache.Load(model); ok {
-		return cache.([]string), nil
-	}
+	key := cacheKey{model.Type(), strict}
 
-	numfield := model.NumField()
-	names := make([]string, 0, numfield)
+	if cache, ok := columnsCache.Load(key); ok {
+		cached := cache.([]string)
+		res := make([]string, 0, len(cached))
 
-	isExcluded := func(name string) bool {
-		for _, ex := range excluded {
-			if ex == name {
-				return true
+		keep := func(k string) bool {
+			for _, c := range excluded {
+				if c == k {
+					return false
+				}
+			}
+			return true
+		}
+
+		for _, k := range cached {
+			if keep(k) {
+				res = append(res, k)
 			}
 		}
-		return false
+		return res, nil
 	}
+
+	names := columnNames(model, strict, excluded...)
+	toCache := append(names, excluded...)
+	columnsCache.Store(key, toCache)
+	return names, nil
+}
+
+func columnNames(model reflect.Value, strict bool, excluded ...string) []string {
+	numfield := model.NumField()
+	names := make([]string, 0, numfield)
 
 	for i := 0; i < numfield; i++ {
 		valField := model.Field(i)
@@ -76,26 +104,43 @@ func columns(v interface{}, strict bool, excluded ...string) ([]string, error) {
 		}
 
 		typeField := model.Type().Field(i)
-		if tag, ok := typeField.Tag.Lookup(dbTag); ok {
-			if tag != "-" && !isExcluded(tag) {
-				names = append(names, tag)
+
+		if typeField.Type.Kind() == reflect.Struct && !isValidSqlValue(valField) {
+			embeddedNames := columnNames(valField, strict, excluded...)
+			names = append(names, embeddedNames...)
+			continue
+		}
+
+		fieldName := ColumnsMapper(typeField.Name)
+		if tag, hasTag := typeField.Tag.Lookup(dbTag); hasTag {
+			if tag == "-" {
+				continue
 			}
+			fieldName = tag
+		} else if strict {
+			// there's no tag name and we're in strict mode so move on
 			continue
 		}
 
-		if strict {
+		if isExcluded(fieldName, excluded...) {
 			continue
 		}
 
-		if isExcluded(typeField.Name) || !supportedColumnType(valField.Kind()) {
-			continue
+		if supportedColumnType(valField) || isValidSqlValue(valField) {
+			names = append(names, fieldName)
 		}
-
-		names = append(names, typeField.Name)
 	}
 
-	columnsCache.Store(model, names)
-	return names, nil
+	return names
+}
+
+func isExcluded(name string, excluded ...string) bool {
+	for _, ex := range excluded {
+		if ex == name {
+			return true
+		}
+	}
+	return false
 }
 
 func reflectValue(v interface{}) (reflect.Value, error) {
@@ -112,14 +157,35 @@ func reflectValue(v interface{}) (reflect.Value, error) {
 	return vVal, nil
 }
 
-func supportedColumnType(k reflect.Kind) bool {
-	switch k {
+func supportedColumnType(v reflect.Value) bool {
+	switch v.Kind() {
 	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32,
 		reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32,
 		reflect.Uint64, reflect.Float32, reflect.Float64, reflect.Interface,
 		reflect.String:
 		return true
+	case reflect.Ptr, reflect.Slice, reflect.Array:
+		ptrVal := reflect.New(v.Type().Elem())
+		return supportedColumnType(ptrVal.Elem())
 	default:
 		return false
 	}
+}
+
+func isValidSqlValue(v reflect.Value) bool {
+	// This method covers two cases in which we know the Value can be converted to sql:
+	// 1. It returns true for sql.driver's type check for types like time.Time
+	// 2. It implements the driver.Valuer interface allowing conversion directly
+	//    into sql statements
+	if v.Kind() == reflect.Ptr {
+		ptrVal := reflect.New(v.Type().Elem())
+		return isValidSqlValue(ptrVal.Elem())
+	}
+
+	if driver.IsValue(v.Interface()) {
+		return true
+	}
+
+	valuerType := reflect.TypeOf((*driver.Valuer)(nil)).Elem()
+	return v.Type().Implements(valuerType)
 }

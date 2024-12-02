@@ -1,3 +1,4 @@
+---
 name: go test
 
 on:
@@ -13,21 +14,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.13', '1.14', '1.15', '1.16', '1.17']
+        go: 
+          - '1.17'
+          - '1.18'
+          - '1.19'
+          - '1.20'
+          - '1.21'
 
     steps:
     - name: Set up Go 1.x
-      uses: actions/setup-go@v2
+      uses: actions/setup-go@v3
       with:
         go-version: ${{ matrix.go }}
       id: go
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Lint
-      uses: golangci/golangci-lint-action@v2
+      uses: golangci/golangci-lint-action@v3
       with:
-        version: v1.46
+        version: v1.51
 
     - name: Test
       run: go test -v -coverprofile=.coverprofile .

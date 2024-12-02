@@ -1,8 +1,11 @@
 package scan
 
 import (
+	"database/sql/driver"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,16 +66,76 @@ func TestColumnsIgnoresPrivateFields(t *testing.T) {
 	assert.EqualValues(t, []string{"Age"}, cols)
 }
 
-func TestColumnsAddsComplexTypesWhenStructTag(t *testing.T) {
+func TestColumnsAddsComplexTypesWhenNoStructTag(t *testing.T) {
 	type person struct {
 		Address struct {
 			Street string
+		}
+	}
+
+	cols, err := Columns(&person{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"Street"}, cols)
+}
+
+func TestColumnsAddsComplexTypesWhenStructTag(t *testing.T) {
+	type person struct {
+		Address struct {
+			Street string `db:"address.street"`
+		}
+	}
+
+	cols, err := Columns(&person{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"address.street"}, cols)
+}
+
+func TestColumnsDoesNotAddStructTag(t *testing.T) {
+	type person struct {
+		Address struct {
+			Street string `db:"address.street"`
 		} `db:"address"`
 	}
 
 	cols, err := Columns(&person{})
 	assert.NoError(t, err)
-	assert.EqualValues(t, []string{"address"}, cols)
+	assert.EqualValues(t, []string{"address.street"}, cols)
+}
+
+func TestColumnsStrictAddsComplexTypesWhenStructTag(t *testing.T) {
+	type person struct {
+		Address struct {
+			Street string `db:"address.street"`
+		}
+	}
+
+	cols, err := ColumnsStrict(&person{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"address.street"}, cols)
+}
+
+func TestColumnsStrictDoesNotAddComplexTypesWhenNoStructTag(t *testing.T) {
+	type person struct {
+		Address struct {
+			Street string
+		}
+	}
+
+	cols, err := ColumnsStrict(&person{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{}, cols)
+}
+
+func TestColumnsStrictAddsComplexTypesRegardlessOfStructTag(t *testing.T) {
+	type person struct {
+		Address struct {
+			Street string `db:"address.street"`
+		} `db:"-"`
+	}
+
+	cols, err := ColumnsStrict(&person{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"address.street"}, cols)
 }
 
 func TestColumnsIgnoresComplexTypesWhenNoStructTag(t *testing.T) {
@@ -84,7 +147,7 @@ func TestColumnsIgnoresComplexTypesWhenNoStructTag(t *testing.T) {
 
 	cols, err := Columns(&person{})
 	assert.NoError(t, err)
-	assert.EqualValues(t, []string{}, cols)
+	assert.EqualValues(t, []string{"Street"}, cols)
 }
 
 func TestColumnsExcludesFields(t *testing.T) {
@@ -96,6 +159,42 @@ func TestColumnsExcludesFields(t *testing.T) {
 	cols, err := ColumnsStrict(&person{}, "name")
 	assert.NoError(t, err)
 	assert.EqualValues(t, []string{"age"}, cols)
+}
+
+func TestColumnsExcludesFieldsFromCache(t *testing.T) {
+	type person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	// Create the cache first
+	thing := &person{}
+	cols1, err := Columns(thing)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"name", "age"}, cols1)
+
+	// verify that all cached fields aren't returned
+	cols2, err := Columns(thing, "age")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"name"}, cols2)
+}
+
+func TestColumnsIncludesFieldsCachedFromFirstExclude(t *testing.T) {
+	type person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	// Create the cache first
+	thing := &person{}
+	cols1, err := Columns(thing, "age")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"name"}, cols1)
+
+	// verify that all fields are returned
+	cols2, err := Columns(thing)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"name", "age"}, cols2)
 }
 
 func TestColumnsStrictExcludesUntaggedFields(t *testing.T) {
@@ -135,13 +234,115 @@ func TestColumnsReadsFromCacheFirst(t *testing.T) {
 		Name string
 	}
 
-	v := reflect.Indirect(reflect.ValueOf(&person))
+	key := cacheKey{
+		Type:   reflect.Indirect(reflect.ValueOf(&person)).Type(),
+		Strict: false,
+	}
 	expected := []string{"fake"}
-	columnsCache.Store(v, expected)
+	columnsCache.Store(key, expected)
 
 	cols, err := Columns(&person)
 	assert.NoError(t, err)
 	assert.EqualValues(t, expected, cols)
+}
+
+func TestColumnsStoresOneCacheEntryPerInstance(t *testing.T) {
+	type person struct {
+		ID   int64
+		Name string
+	}
+
+	before := 0
+	columnsCache.Range(func(key interface{}, value interface{}) bool {
+		before += 1
+		return true
+	})
+
+	for i := 0; i < 10; i++ {
+		_, err := Columns(&person{})
+		assert.NoError(t, err)
+	}
+
+	after := 0
+	columnsCache.Range(func(key interface{}, value interface{}) bool {
+		after += 1
+		return true
+	})
+
+	assert.Equal(t, 1, after-before, "Cache size grew unexpectedly")
+}
+
+func TestColumnsReturnsStructTagsWithPointers(t *testing.T) {
+	type personUpdate struct {
+		Name *string `db:"name"`
+	}
+
+	cols, err := Columns(&personUpdate{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"name"}, cols)
+}
+
+func TestColumnsReturnsStructTagsWithArrays(t *testing.T) {
+	type personGetFilter struct {
+		PersonIDs *string `db:"id"`
+	}
+
+	cols, err := Columns(&personGetFilter{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"id"}, cols)
+}
+
+func TestColumnsReturnsStructTagsWithPointersToArrays(t *testing.T) {
+	type personGetFilter struct {
+		PersonIDs *[]string `db:"id"`
+	}
+
+	cols, err := Columns(&personGetFilter{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"id"}, cols)
+}
+
+func TestColumnsWorkWithValidSqlValueTypes(t *testing.T) {
+	type coupon struct {
+		Value   int       `db:"value"`
+		Expires time.Time `db:"expires"`
+	}
+
+	c := &coupon{}
+	cols, err := Columns(c)
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"value", "expires"}, cols)
+}
+
+func TestColumnsWorkWithPointerValidSqlTypes(t *testing.T) {
+	type coupon struct {
+		Value   int        `db:"value"`
+		Expires *time.Time `db:"expires"`
+	}
+
+	c := &coupon{}
+	cols, err := Columns(c)
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"value", "expires"}, cols)
+}
+
+type Pet struct {
+	Species string
+	Name    string
+}
+
+func (p Pet) Value() (driver.Value, error) {
+	return fmt.Sprintf("%s, a %s", p.Name, p.Species), nil
+}
+
+func TestValuesWorkWithDriverValuerImplementers(t *testing.T) {
+	type person struct {
+		Name string `db:"name"`
+		Pet  Pet    `db:"pet"`
+	}
+	cols, err := ColumnsStrict(&person{})
+	assert.NoError(t, err)
+	assert.EqualValues(t, []string{"name", "pet"}, cols)
 }
 
 func BenchmarkColumnsLargeStruct(b *testing.B) {
@@ -150,4 +351,8 @@ func BenchmarkColumnsLargeStruct(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		Columns(ls)
 	}
+}
+
+func ptr(s string) *string {
+	return &s
 }

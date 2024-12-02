@@ -3,6 +3,7 @@ package scan
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,6 +32,86 @@ func TestValuesScansDBTags(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.EqualValues(t, []interface{}{"Brett"}, vals)
+}
+
+func TestValuesScansPointerDBTags(t *testing.T) {
+	type person struct {
+		Name *string `db:"n"`
+	}
+
+	p := &person{Name: ptr("Brett")}
+	vals, err := Values([]string{"n"}, p)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, []interface{}{ptr("Brett")}, vals)
+}
+
+func TestValuesReturnsNilPointers(t *testing.T) {
+	type person struct {
+		Name *string `db:"n"`
+	}
+
+	p := &person{Name: nil}
+	vals, err := Values([]string{"n"}, p)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, []interface{}{(*string)(nil)}, vals)
+}
+
+func TestValuesScansSliceDBTags(t *testing.T) {
+	type person struct {
+		Names []string `db:"n"`
+	}
+
+	p := &person{Names: []string{"Brett", "The Big B"}}
+	vals, err := Values([]string{"n"}, p)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, []interface{}{[]string{"Brett", "The Big B"}}, vals)
+}
+
+func TestValuesScansNilSliceDBTags(t *testing.T) {
+	type person struct {
+		Names []string `db:"n"`
+	}
+
+	p := &person{}
+	vals, err := Values([]string{"n"}, p)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, []interface{}{[]string(nil)}, vals)
+}
+
+func TestValuesScansPointerToSliceDBTags(t *testing.T) {
+	type personUpdate struct {
+		Names *[]string `db:"n"`
+	}
+	names := []string{"Jack", "J Man"}
+	p := &personUpdate{Names: &names}
+	vals, err := Values([]string{"n"}, p)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, []interface{}{&names}, vals)
+}
+
+func TestValuesScansNestedFields(t *testing.T) {
+	type Address struct {
+		Street string
+		City   string
+	}
+
+	type Person struct {
+		Name string
+		Age  int
+		Address
+	}
+
+	p := &Person{Name: "Brett", Address: Address{Street: "123 Main St", City: "San Francisco"}}
+
+	vals, err := Values([]string{"Name", "Street", "City"}, p)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, []interface{}{"Brett", "123 Main St", "San Francisco"}, vals)
 }
 
 func TestValuesReturnsErrorWhenPassingNonPointer(t *testing.T) {
@@ -79,12 +160,62 @@ func TestValuesReadsFromCacheFirst(t *testing.T) {
 		Name: "Brett",
 	}
 
-	v := reflect.Indirect(reflect.ValueOf(&person))
-	valuesCache.Store(v, map[string]int{"Name": 0})
+	v := reflect.Indirect(reflect.ValueOf(&person)).Type()
+	valuesCache.Store(v, map[string][]int{"fake": {0}})
 
-	vals, err := Values([]string{"Name"}, &person)
+	vals, err := Values([]string{"fake"}, &person)
 	require.NoError(t, err)
 	assert.EqualValues(t, []interface{}{"Brett"}, vals)
+}
+
+func TestValuesValidSqlTypes(t *testing.T) {
+	tNow := time.Now()
+	type coupon struct {
+		Value   int
+		Expires time.Time
+	}
+	c := &coupon{
+		Value:   25,
+		Expires: tNow,
+	}
+
+	vals, err := Values([]string{"Value", "Expires"}, c)
+	require.NoError(t, err)
+	assert.EqualValues(t, []interface{}{25, tNow}, vals)
+}
+
+func TestValuesValidPointerSqlTypes(t *testing.T) {
+	tNow := time.Now()
+	type coupon struct {
+		Value   int
+		Expires *time.Time
+	}
+	c := &coupon{
+		Value:   25,
+		Expires: &tNow,
+	}
+
+	vals, err := Values([]string{"Value", "Expires"}, c)
+	require.NoError(t, err)
+	assert.EqualValues(t, []interface{}{25, &tNow}, vals)
+}
+
+func TestValuesDriverValuerImplementers(t *testing.T) {
+	type person struct {
+		Name string `db:"name"`
+		Pet  Pet    `db:"pet"`
+	}
+	p := &person{
+		Name: "Brett",
+		Pet: Pet{
+			Species: "dog",
+			Name:    "Mila",
+		},
+	}
+
+	vals, err := Values([]string{"Name", "Pet"}, p)
+	require.NoError(t, err)
+	assert.EqualValues(t, []interface{}{"Brett", Pet{Name: "Mila", Species: "dog"}}, vals)
 }
 
 // benchmarks

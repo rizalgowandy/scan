@@ -1,5 +1,9 @@
 # Scan
 
+> [!NOTE]
+> For all intents and purposes, this project is considered 'complete.' I do not plan on making any changes in the near future and have not written any code here since approximately 2021. To the best of my knowledge, everything functions as intended. If you are seeking a more comprehensive solution, please refer to https://github.com/stytchauth/sqx. That being said, this project operates effectively in its current state and requires no new code. Feel free to fork it and continue development if desired.
+> 
+
 [![GoDoc](https://godoc.org/github.com/blockloop/scan?status.svg)](https://godoc.org/github.com/blockloop/scan)
 [![go test](https://github.com/blockloop/scan/workflows/go%20test/badge.svg)](https://github.com/blockloop/scan/actions)
 [![Coveralls github](https://img.shields.io/coveralls/github/blockloop/scan.svg)](https://coveralls.io/github/blockloop/scan)
@@ -7,6 +11,10 @@
 
 Scan standard lib database rows directly to structs or slices. 
 For the most comprehensive and up-to-date docs see the [godoc](https://godoc.org/github.com/blockloop/scan)
+
+```go
+import "github.com/blockloop/scan/v2"
+```
 
 ## Examples
 
@@ -85,7 +93,9 @@ err = json.NewEncoder(os.Stdout).Encode(&person)
 // {"ID":1,"Name":"brett","Company":{"Name":"costco"}}
 ```
 
+### Custom Column Mapping
 
+By default, column names are mapped [to](https://github.com/blockloop/scan/blob/4741cc8ac5746ca7e5893d3b54a3347a7735c168/columns.go#L35) and [from](https://github.com/blockloop/scan/blob/4741cc8ac5746ca7e5893d3b54a3347a7735c168/scanner.go#L33) database column names using basic title case conversion. You can override this behavior by setting `ColumnsMapper` and `ScannerMapper` to custom functions.
 
 ### Strict Scanning
 
@@ -154,18 +164,19 @@ While many other projects support similar features (i.e. [sqlx](https://github.c
 ## Benchmarks 
 
 ```
-λ go test -bench=. -benchtime=10s ./...
+$ go test -bench=. -benchtime=10s ./...
 goos: linux
 goarch: amd64
 pkg: github.com/blockloop/scan
-BenchmarkColumnsLargeStruct-8           50000000               272 ns/op
-BenchmarkValuesLargeStruct-8             2000000              8611 ns/op
-BenchmarkScanRowOneField-8               2000000              8528 ns/op
-BenchmarkScanRowFiveFields-8             1000000             12234 ns/op
-BenchmarkScanTenRowsOneField-8           1000000             16802 ns/op
-BenchmarkScanTenRowsTenFields-8           100000            104587 ns/op
+cpu: 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz
+BenchmarkColumnsLargeStruct-8           41527964               288.0 ns/op
+BenchmarkValuesLargeStruct-8             6816885              1807 ns/op
+BenchmarkScanRowOneField-8               5686971              2074 ns/op
+BenchmarkScanRowFiveFields-8             4962622              2381 ns/op
+BenchmarkScanTenRowsOneField-8           1537761              8598 ns/op
+BenchmarkScanTenRowsTenFields-8           322106             50431 ns/op
 PASS
-ok      github.com/blockloop/scan       116.055s
+ok      github.com/blockloop/scan       92.374s
 ```
 
 

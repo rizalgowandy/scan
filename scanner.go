@@ -27,6 +27,10 @@ var (
 	// OnAutoCloseError can be used to log errors which are returned from rows.Close()
 	// By default this is a NOOP function
 	OnAutoCloseError = func(error) {}
+
+	// ScannerMapper transforms database field names into struct/map field names
+	// E.g. you can set function for convert snake_case into CamelCase
+	ScannerMapper = func(name string) string { return cases.Title(language.English).String(name) }
 )
 
 // Row scans a single row into a single variable. It requires that you use
@@ -35,12 +39,20 @@ var (
 // defers returning err until Scan is called, which is an unnecessary
 // optimization for this library.
 func Row(v interface{}, r RowsScanner) error {
+	if AutoClose {
+		defer closeRows(r)
+	}
+
 	return row(v, r, false)
 }
 
 // RowStrict scans a single row into a single variable. It is identical to
 // Row, but it ignores fields that do not have a db tag
 func RowStrict(v interface{}, r RowsScanner) error {
+	if AutoClose {
+		defer closeRows(r)
+	}
+
 	return row(v, r, true)
 }
 
@@ -75,19 +87,23 @@ func row(v interface{}, r RowsScanner, strict bool) error {
 
 // Rows scans sql rows into a slice (v)
 func Rows(v interface{}, r RowsScanner) (outerr error) {
+	if AutoClose {
+		defer closeRows(r)
+	}
+
 	return rows(v, r, false)
 }
 
 // RowsStrict scans sql rows into a slice (v) only using db tags
 func RowsStrict(v interface{}, r RowsScanner) (outerr error) {
-	return rows(v, r, true)
-}
-
-func rows(v interface{}, r RowsScanner, strict bool) (outerr error) {
 	if AutoClose {
 		defer closeRows(r)
 	}
 
+	return rows(v, r, true)
+}
+
+func rows(v interface{}, r RowsScanner, strict bool) (outerr error) {
 	vType := reflect.TypeOf(v)
 	if k := vType.Kind(); k != reflect.Ptr {
 		return fmt.Errorf("%q must be a pointer: %w", k.String(), ErrNotAPointer)
@@ -162,7 +178,7 @@ func structPointers(sliceItem reflect.Value, cols []string, strict bool) []inter
 			if strict {
 				fieldVal = reflect.ValueOf(nil)
 			} else {
-				fieldVal = sliceItem.FieldByName(cases.Title(language.English).String(colName))
+				fieldVal = sliceItem.FieldByName(ScannerMapper(colName))
 			}
 		}
 		if !fieldVal.IsValid() || !fieldVal.CanSet() {

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/blockloop/scan"
+	"github.com/blockloop/scan/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -311,6 +311,7 @@ func TestRowStrictScansNestedFields(t *testing.T) {
 	assert.Equal(t, "Brett", res.Item.First)
 	assert.Equal(t, "Jones", res.Item.Last)
 }
+
 func TestRowsStrictIgnoresFieldsWithoutDBTag(t *testing.T) {
 	rows := fakeRowsWithRecords(t, []string{"First", "Last"},
 		[]interface{}{"Brett", "Jones"},
@@ -328,6 +329,17 @@ func TestRowsStrictIgnoresFieldsWithoutDBTag(t *testing.T) {
 	assert.Equal(t, "", items[0].Last)
 	assert.Equal(t, "Fred", items[1].First)
 	assert.Equal(t, "", items[1].Last)
+}
+
+func TestRowClosesEarly(t *testing.T) {
+	rows := fakeRowsWithRecords(t, []string{"name"},
+		[]interface{}{"Bob"},
+	)
+
+	var name string
+	// dont' pass a pointer to cause an early error
+	assert.Error(t, scan.Row(name, rows))
+	assert.EqualValues(t, 1, rows.CloseCallCount())
 }
 
 func Test_OnAutoCloseErrorIsCalledWhenRowsCloseErrors(t *testing.T) {
